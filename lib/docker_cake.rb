@@ -1,6 +1,6 @@
-require_relative 'registry_api_client'
+require_relative 'docker_cake/registry_api_client'
+require 'time'
 require 'terminal-table'
-require 'pp'
 
 class DockerCake
 
@@ -62,7 +62,7 @@ class DockerCake
         counted_layers << layer['blobSum']
       end
 
-      puts "#{tag} -> #{stats}"
+      #puts "#{tag} -> #{stats}"
       result << stats
     end
 
@@ -73,7 +73,7 @@ class DockerCake
     rows = result.map do |stats|
       [
         stats[:name],
-        Time.parse(stats[:date]),
+        DateTime.parse(stats[:date]),
         size_to_human(stats[:size]),
         stats[:layers],
         stats[:reuse_img],
@@ -96,10 +96,17 @@ class DockerCake
         cmd = "RUN #{cmd}"
       end
 
+      cmd.gsub!("\t", "    ")
+
+      shorter = []
+      cmd.lines.each do |line|
+        shorter.push(*line.scan(/.{1,90}/))
+      end
+
       [
         layer['id'][0...8],
-        Time.parse(layer['created']).strftime("%F %T"),
-        cmd,
+        DateTime.parse(layer['created']).strftime("%F %T"),
+        shorter.join("\n"),
         size_to_human(layer['size'])
       ]
     end
@@ -124,10 +131,3 @@ class DockerCake
   end
 
 end
-
-#DockerCake.new.repo_info("evpavel/slimerjs-alpine")
-puts
-
-DockerCake.new.compare_versions("evpavel/slimerjs-alpine")
-#DockerCake.new.compare_versions("library/ruby", filter: /^[\d\.]+\-alpine$/, max: 10)
-#DockerCake.new(user: "garudapay", password: "Password01").compare_versions("midtrans/ga_monitor")

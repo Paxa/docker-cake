@@ -1,8 +1,30 @@
-require 'fileutils'
-require 'rest-client'
 require 'json'
+require 'uri'
+require 'socket'
+require 'net/http'
 
 class RegistryApiClient
+
+  class RegistryAuthenticationException < Exception
+  end
+
+  class RegistryAuthorizationException < Exception
+  end
+
+  class RegistryUnknownException < Exception
+  end
+
+  class RegistrySSLException < Exception
+  end
+  
+  class ReauthenticatedException < Exception
+  end
+  
+  class UnknownRegistryException < Exception
+  end
+
+  class InvalidMethod < Exception
+  end
 
   class Waiter
     def initialize
@@ -39,6 +61,7 @@ class RegistryApiClient
     end
   end
 
+  DEFAULT_REGISTRY = "https://registry.hub.docker.com"
   DEFAULT_MANIFEST = "application/vnd.docker.distribution.manifest.v2+json"
   FAT_MANIFEST =     "application/vnd.docker.distribution.manifest.list.v2+json"
 
@@ -46,7 +69,8 @@ class RegistryApiClient
   # @param [Hash] options Client options
   # @option options [#to_s] :user User name for basic authentication
   # @option options [#to_s] :password Password for basic authentication
-  def initialize(url: "https://registry.hub.docker.com", user: nil, password: nil)
+  def initialize(url: DEFAULT_REGISTRY, user: nil, password: nil)
+    @url = url
     uri = URI.parse(url)
     @base_uri = "#{uri.scheme}://#{uri.host}:#{uri.port}"
     @user = user
@@ -99,7 +123,7 @@ class RegistryApiClient
         else
           begin
             head = http_head("/v2/#{repo}/manifests/#{tag}")
-          rescue DockerRegistry2::InvalidMethod
+          rescue InvalidMethod
             # in case we are in a registry pre-2.3.0, which did not support manifest HEAD
             useGet = true
             head = http_get("/v2/#{repo}/manifests/#{tag}")
@@ -112,9 +136,11 @@ class RegistryApiClient
     return resp
   end
 
+  # combines small output and fat output to get layer names and sizes
   def manifest(repo, tag, manifest: nil)
-    # first get the manifest
-    auth_header = %{Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:#{repo}:pull"}
+    if @url == DEFAULT_REGISTRY
+      auth_header = %{Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:#{repo}:pull"}
+    end
     JSON.parse(http_get("/v2/#{repo}/manifests/#{tag}", manifest: manifest, auth: :bearer, auth_header: auth_header))
   end
 
@@ -167,7 +193,8 @@ class RegistryApiClient
         begin
           result[key] = fun.call
         rescue => error
-          p error
+          puts "#{error.class}: #{error.message}"
+          puts error.backtrace
           errors << error
         end
       end
@@ -200,15 +227,15 @@ class RegistryApiClient
   private
     def http_req(type, url, stream: nil, manifest: nil, auth: nil, auth_header: nil)
       begin
-        if auth == :bearer
+        if auth == :bearer && auth_header
           return do_bearer_req(type, url, auth_header, stream: stream, manifest: manifest)
         else
           return req_no_auth(type, url, stream: stream, manifest: manifest)
         end
       rescue SocketError => e
         p e
-        raise DockerRegistry2::RegistryUnknownException
-      rescue RestClient::Unauthorized => e
+        raise RegistryUnknownException
+      rescue HTTP::Unauthorized => e
         header = e.response.headers[:www_authenticate]
         method = header.downcase.split(' ')[0]
         case method
@@ -217,7 +244,7 @@ class RegistryApiClient
         when 'bearer'
           response = do_bearer_req(type, url, header, stream: stream, manifest: manifest)
         else
-          raise DockerRegistry2::RegistryUnknownException
+          raise RegistryUnknownException
         end
       end
       return response
@@ -229,7 +256,7 @@ class RegistryApiClient
           stream.write chunk
         end
       end
-      response = RestClient::Request.execute(
+      response = HTTP.execute(
         method: type,
         url: @base_uri + url,
         headers: {Accept: manifest || @manifest_format},
@@ -244,7 +271,7 @@ class RegistryApiClient
             stream.write chunk
           end
         }
-        response = RestClient::Request.execute(
+        response = HTTP.execute(
           method: type,
           url: @base_uri + url,
           user: @user,
@@ -253,11 +280,11 @@ class RegistryApiClient
           block_response: block
         )
       rescue SocketError
-        raise DockerRegistry2::RegistryUnknownException
-      rescue RestClient::Unauthorized
-        raise DockerRegistry2::RegistryAuthenticationException
-      rescue RestClient::MethodNotAllowed
-        raise DockerRegistry2::InvalidMethod
+        raise RegistryUnknownException
+      rescue HTTP::Unauthorized
+        raise RegistryAuthenticationException
+      rescue MethodNotAllowed
+        raise InvalidMethod
       end
       return response
     end
@@ -270,18 +297,18 @@ class RegistryApiClient
             stream.write chunk
           end
         }
-        response = RestClient::Request.execute(
+        response = HTTP.execute(
           method: type,
           url: @base_uri + url,
           headers: {Authorization: 'Bearer ' + token, Accept: manifest || @manifest_format},
           block_response: block
         )
       rescue SocketError
-        raise DockerRegistry2::RegistryUnknownException
-      rescue RestClient::Unauthorized
-        raise DockerRegistry2::RegistryAuthenticationException
-      rescue RestClient::MethodNotAllowed
-        raise DockerRegistry2::InvalidMethod
+        raise RegistryUnknownException
+      rescue HTTP::Unauthorized
+        raise RegistryAuthenticationException
+      rescue MethodNotAllowed
+        raise InvalidMethod
       end
 
       return response
@@ -309,16 +336,16 @@ class RegistryApiClient
       # authenticate against the realm
       uri = URI.parse(target[:realm])
       begin
-        response = RestClient::Request.execute(
+        response = HTTP.execute(
           method: :get,
           url: uri.to_s,
-          headers: {params: target[:params]},
+          query: target[:params],
           user: @user,
           password: @password
         )
-      rescue RestClient::Unauthorized
+      rescue HTTP::Unauthorized
         # bad authentication
-        raise DockerRegistry2::RegistryAuthenticationException
+        raise RegistryAuthenticationException
       end
       # now save the web token
       token = JSON.parse(response)["token"]
@@ -346,8 +373,87 @@ class RegistryApiClient
   module HTTP
     extend self
 
-    def execute(method:, url:, headers: {}, user: nil, password: nil, block_response: nil)
-      
+    class Unauthorized < Exception
+      attr_accessor :response
+      def initialize(message, response)
+        super(message)
+        @response = response
+      end
+    end
+
+    class MethodNotAllowed < Exception
+      attr_accessor :response
+      def initialize(message, response)
+        super(message)
+        @response = response
+      end
+    end
+
+    def execute(method:, url:, headers: {}, user: nil, password: nil, block_response: nil, body: nil, query: nil)
+      if query
+        uri = URI.parse(url)
+        url += (uri.query ? "&" : "?") + URI.encode_www_form(query)
+      end
+      uri = URI.parse(url)
+      response = nil
+
+      Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https') do |http|
+        http_klass = case method.to_sym
+          when :get    then Net::HTTP::Get
+          when :post   then Net::HTTP::Post
+          when :put    then Net::HTTP::Put
+          when :patch  then Net::HTTP::Patch
+          when :head   then Net::HTTP::Head
+          when :delete then Net::HTTP::Delete
+          when :move   then Net::HTTP::Move
+          when :copy   then Net::HTTP::Copy
+          else Net::HTTP::Post
+        end
+
+        request = http_klass.new(uri)
+        headers.each do |key, value|
+          request[key.to_s] = value
+        end
+
+        if body
+          request.body = body
+        end
+
+        if user != nil || password != nil
+          request.basic_auth(user, password)
+        end
+
+        puts "HTTP req #{method} #{url} #{headers}" if ENV['DEBUG']
+
+        http_resp = http.request(request)
+
+        puts "-> HTTP status: #{http_resp.code} size: #{http_resp.body.size}" if ENV['DEBUG']
+
+        response = Response.new(http_resp)
+
+        if http_resp.code.to_s == "401"
+          raise Unauthorized.new(http_resp.body, response)
+        end
+
+        if http_resp.code.to_s == "405"
+          raise MethodNotAllowed.new(http_resp.body, response)
+        end
+
+        return response
+      end
+    end
+
+    class Response < String
+      attr_accessor :headers
+
+      def initialize(http_response)
+        @http_response = http_response
+        @headers = {}
+        @http_response.to_hash.each do |key, value|
+          @headers[key.gsub('-', '_').to_sym] = value.last
+        end
+        super(http_response.body)
+      end
     end
   end
 end
