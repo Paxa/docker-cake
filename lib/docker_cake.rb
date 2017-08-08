@@ -73,7 +73,7 @@ class DockerCake
     rows = result.map do |stats|
       [
         stats[:name],
-        DateTime.parse(stats[:date]),
+        DateTime.parse(stats[:date]).strftime("%F %T"),
         size_to_human(stats[:size]),
         stats[:layers],
         stats[:reuse_img],
@@ -88,7 +88,7 @@ class DockerCake
 
   def print_manifest(manifest)
     rows = manifest.map do |layer|
-      cmd = layer.dig('container_config', 'Cmd') || ['']
+      cmd = layer['container_config'] && layer['container_config']['Cmd'] || ['']
       cmd = cmd.join(" ").gsub('\n', "\n").sub(/#{'/bin/sh -c'}\s+/, '')
       if cmd.start_with?('#(nop)')
         cmd.sub!(/#\(nop\)\s+/, '')
