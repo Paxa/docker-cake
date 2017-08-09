@@ -7,7 +7,7 @@ class DockerCake
   attr_accessor :registry
 
   def initialize(url: nil, user: nil, password: nil)
-    @registry ||= RegistryApiClient.new(user: user, password: password)
+    @registry ||= RegistryApiClient.new(user: user, password: password, url: url)
   end
 
   def repo_info(name, tag = 'latest')
@@ -17,9 +17,18 @@ class DockerCake
 
   def compare_versions(repo_name, filter: /.+/, max: 10)
     tags = registry.tags(repo_name, false)['tags']
+
+    if ENV['DEBUG']
+      puts "Found tags: #{tags.join(", ")}"
+    end
+
     tags.select! {|t| t =~ filter}
 
     selected_tags = tags.last(max)
+
+    if ENV['DEBUG']
+      puts "Analyzing #{selected_tags.size} tags: #{selected_tags.join(", ")}..."
+    end
 
     manifests = {}
     procs = selected_tags.map do |tag|

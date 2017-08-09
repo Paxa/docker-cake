@@ -26,6 +26,16 @@ class RegistryApiClient
   class InvalidMethod < Exception
   end
 
+  class JsonError < Exception
+    attr_reader :response
+    attr_reader :parent
+    def initialize(message, response = nil)
+      super(message)
+      @parent = message if message.is_a?(Exception)
+      @response = response
+    end
+  end
+
   class Waiter
     def initialize
       @queue = Queue.new
@@ -70,6 +80,7 @@ class RegistryApiClient
   # @option options [#to_s] :user User name for basic authentication
   # @option options [#to_s] :password Password for basic authentication
   def initialize(url: DEFAULT_REGISTRY, user: nil, password: nil)
+    url = url || DEFAULT_REGISTRY
     @url = url
     uri = URI.parse(url)
     @base_uri = "#{uri.scheme}://#{uri.host}:#{uri.port}"
@@ -112,7 +123,11 @@ class RegistryApiClient
   def tags(repo, withHashes = false)
     response = http_get("/v2/#{repo}/tags/list")
     # parse the response
-    resp = JSON.parse(response)
+    resp = begin
+      JSON.parse(response)
+    rescue JSON::ParserError => e
+      raise JsonError.new(e, response)
+    end
     # do we include the hashes?
     if withHashes then
       useGet = false
@@ -200,7 +215,9 @@ class RegistryApiClient
       end
     end
 
-    threads.map(&:join)
+    threads.each do |t|
+      t.alive? && t.join
+    end
 
     if errors.size > 0
       raise errors.first
@@ -232,9 +249,9 @@ class RegistryApiClient
         else
           return req_no_auth(type, url, stream: stream, manifest: manifest)
         end
-      rescue SocketError => e
-        p e
-        raise RegistryUnknownException
+#      rescue SocketError => e
+#        p e
+#        raise RegistryUnknownException
       rescue HTTP::Unauthorized => e
         header = e.response.headers[:www_authenticate]
         method = header.downcase.split(' ')[0]
@@ -279,11 +296,11 @@ class RegistryApiClient
           headers: {Accept: manifest || @manifest_format},
           block_response: block
         )
-      rescue SocketError
-        raise RegistryUnknownException
-      rescue HTTP::Unauthorized
-        raise RegistryAuthenticationException
-      rescue MethodNotAllowed
+#      rescue SocketError
+#        raise RegistryUnknownException
+      rescue HTTP::Unauthorized => error
+        raise RegistryAuthenticationException.new(error)
+      rescue HTTP::MethodNotAllowed
         raise InvalidMethod
       end
       return response
@@ -303,11 +320,11 @@ class RegistryApiClient
           headers: {Authorization: 'Bearer ' + token, Accept: manifest || @manifest_format},
           block_response: block
         )
-      rescue SocketError
-        raise RegistryUnknownException
-      rescue HTTP::Unauthorized
-        raise RegistryAuthenticationException
-      rescue MethodNotAllowed
+#      rescue SocketError
+#        raise RegistryUnknownException
+      rescue HTTP::Unauthorized => e
+        raise RegistryAuthenticationException.new(e)
+      rescue HTTP::MethodNotAllowed
         raise InvalidMethod
       end
 
@@ -324,7 +341,12 @@ class RegistryApiClient
       if AUTH_CACHE[scope].is_a?(String)
         return AUTH_CACHE[scope]
       elsif AUTH_CACHE[scope].is_a?(PubSub)
-        return AUTH_CACHE[scope].wait
+        result = AUTH_CACHE[scope].wait
+        if result.is_a?(Exception)
+          raise result
+        else
+          return result
+        end
       else
         AUTH_CACHE[scope] = PubSub.new
       end
@@ -343,9 +365,10 @@ class RegistryApiClient
           user: @user,
           password: @password
         )
-      rescue HTTP::Unauthorized
+      rescue HTTP::Unauthorized => error
         # bad authentication
-        raise RegistryAuthenticationException
+        AUTH_CACHE[scope].notify(error)
+        raise RegistryAuthenticationException.new(error)
       end
       # now save the web token
       token = JSON.parse(response)["token"]
@@ -373,7 +396,7 @@ class RegistryApiClient
   module HTTP
     extend self
 
-    class Unauthorized < Exception
+    class ResponseError < Exception
       attr_accessor :response
       def initialize(message, response)
         super(message)
@@ -381,12 +404,13 @@ class RegistryApiClient
       end
     end
 
-    class MethodNotAllowed < Exception
-      attr_accessor :response
-      def initialize(message, response)
-        super(message)
-        @response = response
-      end
+    class Unauthorized < ResponseError
+    end
+
+    class MethodNotAllowed < ResponseError
+    end
+
+    class NotFound < ResponseError
     end
 
     def execute(method:, url:, headers: {}, user: nil, password: nil, block_response: nil, body: nil, query: nil)
@@ -437,6 +461,10 @@ class RegistryApiClient
 
         if http_resp.code.to_s == "405"
           raise MethodNotAllowed.new(http_resp.body, response)
+        end
+
+        if http_resp.code.to_s == '404'
+          raise NotFound.new(http_resp.body, response)
         end
 
         return response

@@ -1,4 +1,5 @@
 require 'optparse'
+require 'socket'
 require_relative '../docker_cake'
 
 options = {}
@@ -49,13 +50,48 @@ if !repo || repo == ''
   exit(1)
 end
 
-connect_options = {user: options[:user], password: options[:password]}
-connect_options[:url] = options[:url] if options[:url]
+connect_options = {
+  user: options[:user],
+  password: options[:password],
+  url: options[:url]
+}
 
-if options[:layers]
-  DockerCake.new(connect_options).repo_info(repo, tag || 'latest')
-else
-  opts = {}
-  opts[:max] = options[:max].to_i if options[:max]
-  DockerCake.new(connect_options).compare_versions(repo, opts)
+begin
+  if options[:layers]
+    DockerCake.new(connect_options).repo_info(repo, tag || 'latest')
+  else
+    opts = {}
+    opts[:max] = options[:max].to_i if options[:max]
+    DockerCake.new(connect_options).compare_versions(repo, opts)
+  end
+rescue RegistryApiClient::RegistryAuthenticationException => e
+  puts "Permission denied, make sure username and password are correct"
+  puts "Server response: #{e.message}"
+  puts "Example:"
+  puts "    docker-cake bob/private_repo -u bob -p ***"
+  exit 1
+rescue RegistryApiClient::HTTP::NotFound => e
+  if options[:layers]
+    puts "Repository or tag not found"
+  else
+    puts "Repository not found"
+  end
+  puts "Example:"
+  puts "    docker-cake library/ruby"
+  exit 1
+rescue RegistryApiClient::JsonError => error
+  message = error.message.size > 300 ? error.message[0..300] + "..." : error.message
+  puts "Error parsing JSON response: #{message} (#{(error.parent || error).class})"
+  body = error.response.size > 300 ? error.response[0..300] + "..." : error.response
+  puts "Server response body: #{body}"
+  if ENV['DEBUG']
+    headers = error.response.headers.to_a.map {|pair| pair.join(": ")}.join("\n  ")
+    puts "Headers:\n  #{headers}"
+  end
+  exit 1
+rescue SocketError => e
+  puts "Can not connect to registery:"
+  puts "#{e.class}: #{e.message}"
+  puts e.backtrace if ENV['DEBUG']
+  exit 1
 end
