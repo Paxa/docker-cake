@@ -2,7 +2,7 @@ Gem::Specification.new do |gem|
   gem.specification_version = 3
 
   gem.name = 'docker-cake'
-  gem.version = "0.2"
+  gem.version = "0.2.1"
   gem.authors = ["Pavel Evstigneev"]
   gem.email = ["pavel.evst@gmail.com"]
   gem.license = 'MIT'
