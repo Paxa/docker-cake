@@ -61,14 +61,17 @@ class DockerCake
         stats[:size] += layer['size'] || 0
         stats[:layers] += 1
         stats[:date] = layer['created'] if layer['created'] > stats[:date]
-        if counted_layers.include?(layer['blobSum'])
+
+        layer_key = layer['blobSum'] + "_" + layer['id']
+
+        if counted_layers.include?(layer_key)
           stats[:reuse_img] += 1
         else
           stats[:add_img] += 1
           stats[:add_size] += layer['size'] || 0
         end
 
-        counted_layers << layer['blobSum']
+        counted_layers << layer_key
       end
 
       #puts "#{tag} -> #{stats}"
