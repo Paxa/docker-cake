@@ -56,6 +56,10 @@ connect_options = {
   url: options[:url]
 }
 
+if repo.include?(":") && !tag
+  repo, tag = repo.split(":")
+end
+
 begin
   if options[:layers]
     DockerCake.new(connect_options).repo_info(repo, tag || 'latest')
@@ -72,7 +76,7 @@ rescue RegistryApiClient::RegistryAuthenticationException => e
   exit 1
 rescue RegistryApiClient::HTTP::NotFound => e
   if options[:layers]
-    puts "Repository or tag not found"
+    puts "Repository '#{repo}' or tag '#{tag || 'latest'}' not found"
   else
     puts "Repository not found"
   end
