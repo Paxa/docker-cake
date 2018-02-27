@@ -58,11 +58,13 @@ class DockerCake
       images_map[map_key] ||= tag
 
       manifests[tag].each do |layer|
+        next if layer['size'] == nil
+
         stats[:size] += layer['size'] || 0
         stats[:layers] += 1
         stats[:date] = layer['created'] if layer['created'] > stats[:date]
 
-        layer_key = layer['blobSum'] + "_" + layer['id']
+        layer_key = layer['blobSum'] #+ "_" + layer['id']
 
         if counted_layers.include?(layer_key)
           stats[:reuse_img] += 1

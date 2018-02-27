@@ -72,7 +72,7 @@ class RegistryApiClient
   end
 
   DEFAULT_REGISTRY = "https://registry.hub.docker.com"
-  DEFAULT_MANIFEST = "application/vnd.docker.distribution.manifest.v2+json"
+  DEFAULT_MANIFEST = "application/vnd.docker.distribution.manifest.v1+json"
   FAT_MANIFEST =     "application/vnd.docker.distribution.manifest.list.v2+json"
 
   # @param [#to_s] base_uri Docker registry base URI
@@ -165,7 +165,7 @@ class RegistryApiClient
 
     resp = in_parallel(
       basic: lambda { manifest(repo, tag) },
-      fat:   lambda { manifest(repo, tag, manifest: FAT_MANIFEST) }
+      fat:   lambda { manifest(repo, tag, manifest: DEFAULT_MANIFEST) }
     )
 
     unless resp[:basic]['layers']
